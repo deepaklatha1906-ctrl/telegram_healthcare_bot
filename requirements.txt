@@ -2,3 +2,4 @@ python-telegram-bot==21.6
 python-dotenv
 google-genai
 httpx
+flask
