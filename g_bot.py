@@ -17,7 +17,6 @@ API_KEYS = [
     os.getenv("GEMINI_API_KEY_2")
 ]
 
-# Remove empty keys
 API_KEYS = [key for key in API_KEYS if key]
 
 # ------------------ START COMMAND ------------------
@@ -25,13 +24,13 @@ API_KEYS = [key for key in API_KEYS if key]
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Hi! I'm your Smart Healthcare AI Bot 🤖🏥\n\n"
-        "Ask me anything about health.\n"
+        "Ask me anything about health.\n\n"
         "Example:\n"
         "• I have fever and headache\n\n"
         "⚠️ This is not a medical diagnosis."
     )
 
-# ------------------ AI RESPONSE WITH FAILOVER ------------------
+# ------------------ AI FUNCTION ------------------
 
 def get_ai_response(user_text):
     for i, key in enumerate(API_KEYS):
@@ -61,8 +60,6 @@ Respond ONLY in this format:
 ❗ Disclaimer:
 This is not a medical diagnosis.
 
-Keep it short, clear, and user-friendly.
-
 User: {user_text}
 """,
                 config={
@@ -71,7 +68,6 @@ User: {user_text}
                 }
             )
 
-            # Safe text extraction (new SDK)
             return response.candidates[0].content.parts[0].text.strip()
 
         except Exception as e:
@@ -80,18 +76,16 @@ User: {user_text}
 
     return "⚠️ All AI services are busy. Please try again later."
 
-# ------------------ HANDLE MESSAGE ------------------
+# ------------------ MESSAGE HANDLER ------------------
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
     await update.message.chat.send_action(action="typing")
 
-    loop = asyncio.get_event_loop()
-
     try:
         reply = await asyncio.wait_for(
-            loop.run_in_executor(None, get_ai_response, user_text),
+            asyncio.to_thread(get_ai_response, user_text),
             timeout=20
         )
     except asyncio.TimeoutError:
@@ -102,7 +96,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ------------------ MAIN ------------------
 
 def main():
-    # Increase timeout to avoid network issues
     request = HTTPXRequest(connect_timeout=30, read_timeout=30)
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).request(request).build()
@@ -111,7 +104,9 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     print("🚀 Multi-Key Gemini Healthcare Bot Running...")
-    app.run_polling()
+
+    # FIX: important for Render / Python 3.13+
+    app.run_polling(close_loop=False)
 
 # ------------------ RUN ------------------
 
