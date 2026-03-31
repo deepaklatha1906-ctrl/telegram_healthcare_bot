@@ -1,114 +1,109 @@
 import os
 from dotenv import load_dotenv
-from google import genai
+from flask import Flask, request
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes, CommandHandler
-from telegram.request import HTTPXRequest
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from google import genai
 import asyncio
 
-# ------------------ LOAD ENV ------------------
+# ---------------- LOAD ENV ----------------
 
 load_dotenv()
 
-TELEGRAM_TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
 
 API_KEYS = [
     os.getenv("GEMINI_API_KEY_1"),
     os.getenv("GEMINI_API_KEY_2")
 ]
+API_KEYS = [k for k in API_KEYS if k]
 
-API_KEYS = [key for key in API_KEYS if key]
+# ---------------- FLASK APP ----------------
 
-# ------------------ START COMMAND ------------------
+app = Flask(__name__)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Hi! I'm your Smart Healthcare AI Bot 🤖🏥\n\n"
-        "Ask me anything about health.\n\n"
-        "Example:\n"
-        "• I have fever and headache\n\n"
-        "⚠️ This is not a medical diagnosis."
-    )
+# ---------------- TELEGRAM APP ----------------
 
-# ------------------ AI FUNCTION ------------------
+telegram_app = Application.builder().token(TOKEN).build()
+
+# ---------------- GEMINI FUNCTION ----------------
 
 def get_ai_response(user_text):
     for i, key in enumerate(API_KEYS):
         try:
-            print(f"Trying API KEY {i+1}")
-
             client = genai.Client(api_key=key)
 
             response = client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=f"""
-You are a professional healthcare assistant.
+You are a healthcare assistant.
 
-Respond ONLY in this format:
+Respond in:
 
-🩺 Possible Issue:
-<short explanation>
-
-💡 What you can do:
-• Point 1
-• Point 2
-• Point 3
-
-⚠️ When to see a doctor:
-<clear condition>
-
+🩺 Issue:
+💡 Advice:
+⚠️ Doctor visit condition:
 ❗ Disclaimer:
-This is not a medical diagnosis.
 
 User: {user_text}
 """,
-                config={
-                    "temperature": 0.5,
-                    "max_output_tokens": 200
-                }
+                config={"temperature": 0.5, "max_output_tokens": 200}
             )
 
             return response.candidates[0].content.parts[0].text.strip()
 
         except Exception as e:
-            print(f"Key {i+1} failed:", e)
-            continue
+            print(f"API key {i+1} failed:", e)
 
-    return "⚠️ All AI services are busy. Please try again later."
+    return "⚠️ AI unavailable"
 
-# ------------------ MESSAGE HANDLER ------------------
+# ---------------- HANDLERS ----------------
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Healthcare Bot Active!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_text = update.message.text
 
-    await update.message.chat.send_action(action="typing")
+    await update.message.chat.send_action("typing")
 
-    try:
-        reply = await asyncio.wait_for(
-            asyncio.to_thread(get_ai_response, user_text),
-            timeout=20
-        )
-    except asyncio.TimeoutError:
-        reply = "⚠️ AI is taking too long. Please try again."
+    reply = await asyncio.to_thread(get_ai_response, user_text)
 
     await update.message.reply_text(reply)
 
-# ------------------ MAIN ------------------
+telegram_app.add_handler(CommandHandler("start", start))
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-def main():
-    request = HTTPXRequest(connect_timeout=30, read_timeout=30)
+# ---------------- WEBHOOK ROUTE (FIXED) ----------------
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).request(request).build()
+@app.post(f"/{TOKEN}")
+def webhook():
+    data = request.get_json(force=True)
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    update = Update.de_json(data, telegram_app.bot)
 
-    print("🚀 Multi-Key Gemini Healthcare Bot Running...")
+    # SAFE execution (important fix)
+    asyncio.run(telegram_app.process_update(update))
 
-    # FIX: important for Render / Python 3.13+
-    app.run_polling(close_loop=False)
+    return "OK"
 
-# ------------------ RUN ------------------
+# ---------------- HOME ROUTE ----------------
+
+@app.get("/")
+def home():
+    return "Bot is running!"
+
+# ---------------- STARTUP + WEBHOOK SETUP ----------------
 
 if __name__ == "__main__":
-    main()
+    async def setup():
+        await telegram_app.initialize()
+
+        # IMPORTANT: must match route
+        await telegram_app.bot.set_webhook(
+            url=f"https://telegram-healthcare-bot.onrender.com/{TOKEN}"
+        )
+
+    asyncio.run(setup())
+
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
